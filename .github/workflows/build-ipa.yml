@@ -20,14 +20,10 @@ jobs:
           import os, sys, subprocess, shutil, zipfile
 
           print("=== Step 1: Locating iPhoneOS SDK ===")
-          try:
-              sdk_path = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"]).decode().strip()
-              print(f"Using SDK: {sdk_path}")
-          except Exception as e:
-              print(f"Error locating iPhoneOS SDK: {e}")
-              sys.exit(1)
+          sdk_path = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"]).decode().strip()
+          print(f"Active SDK: {sdk_path}")
 
-          print("=== Step 2: Locating Source Files ===")
+          print("=== Step 2: Checking & Repairing Swift Source Files ===")
           plist_path = None
           for root, dirs, files in os.walk("."):
               if "Info.plist" in files:
@@ -35,9 +31,9 @@ jobs:
                   break
 
           if not plist_path:
-              print("Error: Could not find Info.plist in repository!")
+              print("Error: Info.plist not found in repository!")
               sys.exit(1)
-          print(f"Found Info.plist: {plist_path}")
+          print(f"Info.plist located at: {plist_path}")
 
           swift_files = []
           for root, dirs, files in os.walk("."):
@@ -45,17 +41,36 @@ jobs:
                   continue
               for f in files:
                   if f.endswith(".swift") and f != "Package.swift":
-                      swift_files.append(os.path.join(root, f))
+                      path = os.path.join(root, f)
+                      
+                      # Automatically fix missing framework imports in source files
+                      with open(path, "r", encoding="utf-8") as fp:
+                          code = fp.read()
+                      
+                      modified = False
+                      if "CLLocation" in code and "import CoreLocation" not in code:
+                          code = "import CoreLocation\n" + code
+                          modified = True
+                      if "MapKit" not in code and ("MKMapItem" in code or "MKRoute" in code):
+                          code = "import MapKit\n" + code
+                          modified = True
+                      
+                      if modified:
+                          with open(path, "w", encoding="utf-8") as fp:
+                              fp.write(code)
+                          print(f"Auto-fixed missing imports in: {path}")
+
+                      swift_files.append(path)
 
           if not swift_files:
               print("Error: No Swift files found to compile!")
               sys.exit(1)
 
-          print(f"Compiling {len(swift_files)} Swift source files:")
+          print(f"Compiling {len(swift_files)} verified application source files:")
           for sf in swift_files:
               print(f"  - {sf}")
 
-          print("=== Step 3: Setting Up App Bundle ===")
+          print("=== Step 3: Preparing App Bundle ===")
           app_dir = os.path.join("build", "Payload", "KTMNav.app")
           os.makedirs(app_dir, exist_ok=True)
           shutil.copy(plist_path, os.path.join(app_dir, "Info.plist"))
@@ -70,17 +85,23 @@ jobs:
               "-parse-as-library",
               "-O",
               "-emit-executable",
+              "-framework", "Foundation",
+              "-framework", "UIKit",
+              "-framework", "SwiftUI",
+              "-framework", "MapKit",
+              "-framework", "CoreLocation",
+              "-framework", "CoreBluetooth",
+              "-framework", "AVFoundation",
               "-o", output_bin
           ] + swift_files
 
-          result = subprocess.run(compile_cmd, capture_output=True, text=True)
-          if result.returncode != 0:
-              print("--- Compilation Output ---")
-              print(result.stdout)
-              print(result.stderr)
-              sys.exit(result.returncode)
+          print("Executing Swift compiler...")
+          compile_res = subprocess.run(compile_cmd)
+          if compile_res.returncode != 0:
+              print(f"Compilation exited with code {compile_res.returncode}")
+              sys.exit(compile_res.returncode)
 
-          print("Compilation succeeded!")
+          print("Compilation completed successfully!")
 
           print("=== Step 5: Packaging into KTMNav.ipa ===")
           ipa_path = os.path.join("build", "KTMNav.ipa")
@@ -92,7 +113,7 @@ jobs:
                       zipf.write(abs_file, rel_file)
 
           size_mb = os.path.getsize(ipa_path) / (1024 * 1024)
-          print(f"KTMNav.ipa created successfully ({size_mb:.2f} MB)")
+          print(f"SUCCESS: KTMNav.ipa generated ({size_mb:.2f} MB)")
           EOF
 
       - name: Upload IPA Artifact
