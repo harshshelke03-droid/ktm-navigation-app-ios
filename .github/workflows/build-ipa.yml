@@ -15,37 +15,40 @@ jobs:
       - name: Build and Package iOS IPA
         run: |
           set -e
-          echo "=== 1. Finding Source Files ==="
+          echo "=== Step 1: Finding Source Files ==="
           PLIST_PATH=$(find . -name "Info.plist" | head -n 1)
           if [ -z "$PLIST_PATH" ]; then
-            echo "Error: Info.plist not found in repository!"
+            echo "Error: Info.plist not found!"
             exit 1
           fi
           echo "Found Info.plist at: $PLIST_PATH"
 
-          SWIFT_FILES=$(find . -name "*.swift" -not -path "*/.*")
-          echo "Found Swift files:"
+          # Collect ONLY app Swift files, strictly skipping Package.swift
+          SWIFT_FILES=$(find . -name "*.swift" -not -name "Package.swift" -not -path "*/.*" -not -path "*/Tests/*")
+          echo "Compiling app files:"
           echo "$SWIFT_FILES"
 
-          echo "=== 2. Creating App Bundle Structure ==="
+          echo "=== Step 2: Creating App Structure ==="
           mkdir -p build/Payload/KTMNav.app
           cp "$PLIST_PATH" build/Payload/KTMNav.app/Info.plist
 
-          echo "=== 3. Compiling Swift Directly to iOS Binary ==="
+          echo "=== Step 3: Compiling Swift Directly to iOS ARM64 Binary ==="
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           xcrun -sdk iphoneos swiftc \
             -target arm64-apple-ios16.0 \
             -sdk "$SDK_PATH" \
-            -O \
+            -module-name KTMNav \
             -parse-as-library \
+            -O \
             -emit-executable \
             -o build/Payload/KTMNav.app/KTMNav \
             $SWIFT_FILES
 
-          echo "=== 4. Packaging into IPA ==="
+          echo "=== Step 4: Packaging IPA ==="
           cd build
           zip -r KTMNav.ipa Payload/
           ls -lh KTMNav.ipa
+          echo "KTMNav.ipa successfully built!"
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4.6.0
