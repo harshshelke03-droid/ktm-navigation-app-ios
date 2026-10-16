@@ -9,34 +9,40 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      # Pinned to Node 24-compatible release to silence the deprecation notice
       - name: Checkout Source Code
         uses: actions/checkout@v4.2.2
 
-      - name: Setup Xcode Environment
-        run: sudo xcode-select -switch /Applications/Xcode_15.4.app
-
       - name: Build and Package iOS IPA
         run: |
-          mkdir -p build/Payload
-          
-          # Generate Xcode project from Swift Package if needed
-          swift package generate-xcodeproj || true
-          
-          # Build target for generic iOS device (arm64)
-          xcodebuild build \
-            -scheme KTMNav \
-            -destination "generic/platform=iOS" \
-            -configuration Release \
-            -derivedDataPath derived_data \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
+          set -e
+          echo "=== 1. Finding Source Files ==="
+          PLIST_PATH=$(find . -name "Info.plist" | head -n 1)
+          if [ -z "$PLIST_PATH" ]; then
+            echo "Error: Info.plist not found in repository!"
+            exit 1
+          fi
+          echo "Found Info.plist at: $PLIST_PATH"
 
-          # Copy compiled .app bundle into Payload directory
-          find derived_data/Build/Products/Release-iphoneos/ -name "*.app" -exec cp -R {} build/Payload/ \;
-          
-          # Package into .ipa
+          SWIFT_FILES=$(find . -name "*.swift" -not -path "*/.*")
+          echo "Found Swift files:"
+          echo "$SWIFT_FILES"
+
+          echo "=== 2. Creating App Bundle Structure ==="
+          mkdir -p build/Payload/KTMNav.app
+          cp "$PLIST_PATH" build/Payload/KTMNav.app/Info.plist
+
+          echo "=== 3. Compiling Swift Directly to iOS Binary ==="
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun -sdk iphoneos swiftc \
+            -target arm64-apple-ios16.0 \
+            -sdk "$SDK_PATH" \
+            -O \
+            -parse-as-library \
+            -emit-executable \
+            -o build/Payload/KTMNav.app/KTMNav \
+            $SWIFT_FILES
+
+          echo "=== 4. Packaging into IPA ==="
           cd build
           zip -r KTMNav.ipa Payload/
           ls -lh KTMNav.ipa
