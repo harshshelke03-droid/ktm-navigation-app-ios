@@ -8,47 +8,92 @@ on:
 jobs:
   build:
     runs-on: macos-14
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4.2.2
 
       - name: Build and Package iOS IPA
         run: |
-          set -e
-          echo "=== Step 1: Finding Source Files ==="
-          PLIST_PATH=$(find . -name "Info.plist" | head -n 1)
-          if [ -z "$PLIST_PATH" ]; then
-            echo "Error: Info.plist not found!"
-            exit 1
-          fi
-          echo "Found Info.plist at: $PLIST_PATH"
+          python3 - << 'EOF'
+          import os, sys, subprocess, shutil, zipfile
 
-          # Collect ONLY app Swift files, strictly skipping Package.swift
-          SWIFT_FILES=$(find . -name "*.swift" -not -name "Package.swift" -not -path "*/.*" -not -path "*/Tests/*")
-          echo "Compiling app files:"
-          echo "$SWIFT_FILES"
+          print("=== Step 1: Locating iPhoneOS SDK ===")
+          try:
+              sdk_path = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"]).decode().strip()
+              print(f"Using SDK: {sdk_path}")
+          except Exception as e:
+              print(f"Error locating iPhoneOS SDK: {e}")
+              sys.exit(1)
 
-          echo "=== Step 2: Creating App Structure ==="
-          mkdir -p build/Payload/KTMNav.app
-          cp "$PLIST_PATH" build/Payload/KTMNav.app/Info.plist
+          print("=== Step 2: Locating Source Files ===")
+          plist_path = None
+          for root, dirs, files in os.walk("."):
+              if "Info.plist" in files:
+                  plist_path = os.path.join(root, "Info.plist")
+                  break
 
-          echo "=== Step 3: Compiling Swift Directly to iOS ARM64 Binary ==="
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          xcrun -sdk iphoneos swiftc \
-            -target arm64-apple-ios16.0 \
-            -sdk "$SDK_PATH" \
-            -module-name KTMNav \
-            -parse-as-library \
-            -O \
-            -emit-executable \
-            -o build/Payload/KTMNav.app/KTMNav \
-            $SWIFT_FILES
+          if not plist_path:
+              print("Error: Could not find Info.plist in repository!")
+              sys.exit(1)
+          print(f"Found Info.plist: {plist_path}")
 
-          echo "=== Step 4: Packaging IPA ==="
-          cd build
-          zip -r KTMNav.ipa Payload/
-          ls -lh KTMNav.ipa
-          echo "KTMNav.ipa successfully built!"
+          swift_files = []
+          for root, dirs, files in os.walk("."):
+              if any(skip in root for skip in [".git", "build", "Tests"]):
+                  continue
+              for f in files:
+                  if f.endswith(".swift") and f != "Package.swift":
+                      swift_files.append(os.path.join(root, f))
+
+          if not swift_files:
+              print("Error: No Swift files found to compile!")
+              sys.exit(1)
+
+          print(f"Compiling {len(swift_files)} Swift source files:")
+          for sf in swift_files:
+              print(f"  - {sf}")
+
+          print("=== Step 3: Setting Up App Bundle ===")
+          app_dir = os.path.join("build", "Payload", "KTMNav.app")
+          os.makedirs(app_dir, exist_ok=True)
+          shutil.copy(plist_path, os.path.join(app_dir, "Info.plist"))
+
+          print("=== Step 4: Compiling to Native iOS Binary ===")
+          output_bin = os.path.join(app_dir, "KTMNav")
+          compile_cmd = [
+              "xcrun", "--sdk", "iphoneos", "swiftc",
+              "-target", "arm64-apple-ios16.0",
+              "-sdk", sdk_path,
+              "-module-name", "KTMNav",
+              "-parse-as-library",
+              "-O",
+              "-emit-executable",
+              "-o", output_bin
+          ] + swift_files
+
+          result = subprocess.run(compile_cmd, capture_output=True, text=True)
+          if result.returncode != 0:
+              print("--- Compilation Output ---")
+              print(result.stdout)
+              print(result.stderr)
+              sys.exit(result.returncode)
+
+          print("Compilation succeeded!")
+
+          print("=== Step 5: Packaging into KTMNav.ipa ===")
+          ipa_path = os.path.join("build", "KTMNav.ipa")
+          with zipfile.ZipFile(ipa_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+              for root, dirs, files in os.walk("build/Payload"):
+                  for file in files:
+                      abs_file = os.path.join(root, file)
+                      rel_file = os.path.relpath(abs_file, "build")
+                      zipf.write(abs_file, rel_file)
+
+          size_mb = os.path.getsize(ipa_path) / (1024 * 1024)
+          print(f"KTMNav.ipa created successfully ({size_mb:.2f} MB)")
+          EOF
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4.6.0
