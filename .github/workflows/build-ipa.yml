@@ -1,0 +1,17 @@
+name: Build KTMNav IPA
+on: [workflow_dispatch, push]
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and Package IPA
+        run: |
+          mkdir -p build/Payload
+          xcodebuild build -scheme KTMNav -destination "generic/platform=iOS" -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -exec cp -R {} build/Payload/ \;
+          cd build && zip -r KTMNav.ipa Payload/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KTMNav-IPA
+          path: build/KTMNav.ipa
