@@ -1,17 +1,49 @@
 name: Build KTMNav IPA
-on: [workflow_dispatch, push]
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
 jobs:
   build:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - name: Build and Package IPA
+      # Pinned to Node 24-compatible release to silence the deprecation notice
+      - name: Checkout Source Code
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Xcode Environment
+        run: sudo xcode-select -switch /Applications/Xcode_15.4.app
+
+      - name: Build and Package iOS IPA
         run: |
           mkdir -p build/Payload
-          xcodebuild build -scheme KTMNav -destination "generic/platform=iOS" -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
-          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -exec cp -R {} build/Payload/ \;
-          cd build && zip -r KTMNav.ipa Payload/
-      - uses: actions/upload-artifact@v4
+          
+          # Generate Xcode project from Swift Package if needed
+          swift package generate-xcodeproj || true
+          
+          # Build target for generic iOS device (arm64)
+          xcodebuild build \
+            -scheme KTMNav \
+            -destination "generic/platform=iOS" \
+            -configuration Release \
+            -derivedDataPath derived_data \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
+          # Copy compiled .app bundle into Payload directory
+          find derived_data/Build/Products/Release-iphoneos/ -name "*.app" -exec cp -R {} build/Payload/ \;
+          
+          # Package into .ipa
+          cd build
+          zip -r KTMNav.ipa Payload/
+          ls -lh KTMNav.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: KTMNav-IPA
           path: build/KTMNav.ipa
+          retention-days: 30
